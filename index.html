@@ -1,0 +1,262 @@
+<!doctype html>
+<html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"></head><body>
+<title>拡大鏡</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+/* Layout: full-height viewer on top, one control panel pinned underneath. Single dark look so the image stays the brightest thing on screen. */
+:root{
+  --bg:#0d1012;
+  --panel:#171c1f;
+  --line:#2b3338;
+  --fg:#eef2f3;
+  --muted:#9fabb1;
+  --accent:#ffc93c;
+  --accent-ink:#1a1400;
+  --font:"Noto Sans JP","Hiragino Sans","Yu Gothic UI",system-ui,sans-serif;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{
+  background:var(--bg);color:var(--fg);font-family:var(--font);font-size:15px;
+  display:flex;flex-direction:column;gap:10px;
+  padding-block:10px;
+  padding-left:max(16px,env(safe-area-inset-left,0px));
+  padding-right:max(16px,env(safe-area-inset-right,0px));
+  -webkit-text-size-adjust:100%;
+}
+.stage{
+  position:relative;flex:1;min-height:0;min-width:0;overflow:hidden;
+  background:#000;border-radius:14px;border:1px solid var(--line);
+  touch-action:none;user-select:none;-webkit-user-select:none;
+}
+.layer{position:absolute;inset:0;transform-origin:50% 50%;will-change:transform}
+.layer video,.layer img{position:absolute;inset:0;width:100%;height:100%;display:block;pointer-events:none}
+.layer video{object-fit:cover}
+.layer img{object-fit:contain}
+.readout{
+  position:absolute;top:10px;left:10px;padding:4px 10px;border-radius:999px;
+  background:rgba(0,0,0,.65);color:var(--accent);font-weight:700;font-size:14px;
+  font-variant-numeric:tabular-nums;pointer-events:none;
+}
+.badge{
+  position:absolute;top:10px;right:10px;padding:4px 10px;border-radius:999px;
+  background:rgba(0,0,0,.65);color:var(--fg);font-size:13px;pointer-events:none;
+}
+.intro{
+  position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;
+  gap:14px;padding:24px;text-align:center;background:var(--bg);
+}
+.intro h1{margin:0;font-size:26px;letter-spacing:.04em}
+.intro p{margin:0;color:var(--muted);line-height:1.7;max-width:22em;text-wrap:balance}
+.intro .note{color:var(--accent);min-height:1.7em}
+.panel{
+  display:flex;flex-direction:column;gap:10px;padding:12px;
+  background:var(--panel);border:1px solid var(--line);border-radius:14px;
+}
+.zoomrow{display:flex;align-items:center;gap:10px}
+.zoomrow input[type=range]{flex:1;min-width:0;height:40px;accent-color:var(--accent)}
+.btn{
+  appearance:none;font:inherit;color:var(--fg);background:#222a2e;border:1px solid var(--line);
+  border-radius:12px;min-height:52px;padding:0 10px;font-weight:600;cursor:pointer;
+  display:flex;align-items:center;justify-content:center;text-align:center;line-height:1.25;
+}
+.btn.round{width:52px;padding:0;font-size:24px;flex:none}
+.btn.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+.btn[aria-pressed="true"]{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+.btn:focus-visible,input:focus-visible{outline:3px solid #fff;outline-offset:2px}
+.btn:active{transform:scale(.97)}
+.btn[hidden]{display:none}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(76px,1fr));gap:8px}
+.file{position:relative;overflow:hidden}
+.file input{position:absolute;inset:0;opacity:0;width:100%;height:100%;cursor:pointer}
+@media (prefers-reduced-motion:reduce){.btn:active{transform:none}}
+</style>
+
+<div class="stage" id="stage">
+  <div class="layer" id="layer">
+    <video id="video" playsinline muted autoplay hidden></video>
+    <img id="photo" alt="拡大中の写真" hidden>
+  </div>
+  <div class="readout" id="readout" hidden>×1.0</div>
+  <div class="badge" id="badge" hidden></div>
+  <div class="intro" id="intro">
+    <h1>拡大鏡</h1>
+    <p>カメラで映した文字や小さな部分を拡大します。ピンチやスライダーで倍率を変え、指でなぞって動かせます。</p>
+    <button class="btn primary" id="startBtn" type="button" style="min-width:220px;min-height:56px;font-size:17px">カメラを起動する</button>
+    <label class="btn file" style="min-width:220px;min-height:52px">写真を撮る・選ぶ
+      <input type="file" accept="image/*" id="fileIntro">
+    </label>
+    <p class="note" id="note" role="status"></p>
+  </div>
+</div>
+
+<div class="panel">
+  <div class="zoomrow">
+    <button class="btn round" id="zoomOut" type="button" aria-label="縮小">−</button>
+    <input type="range" id="zoom" min="1" max="10" step="0.1" value="1" aria-label="倍率">
+    <button class="btn round" id="zoomIn" type="button" aria-label="拡大">＋</button>
+  </div>
+  <div class="grid">
+    <button class="btn" id="camBtn" type="button">カメラ</button>
+    <button class="btn" id="freezeBtn" type="button" aria-pressed="false">固定</button>
+    <button class="btn" id="filterBtn" type="button">色：通常</button>
+    <button class="btn" id="torchBtn" type="button" aria-pressed="false" hidden>ライト</button>
+    <label class="btn file">写真
+      <input type="file" accept="image/*" id="fileBar">
+    </label>
+    <button class="btn" id="resetBtn" type="button">リセット</button>
+  </div>
+</div>
+
+<script>
+(function(){
+  var $=function(id){return document.getElementById(id)};
+  var stage=$('stage'),layer=$('layer'),video=$('video'),photo=$('photo');
+  var intro=$('intro'),note=$('note'),readout=$('readout'),badge=$('badge');
+  var zoomEl=$('zoom'),freezeBtn=$('freezeBtn'),filterBtn=$('filterBtn'),torchBtn=$('torchBtn');
+  var scale=1,tx=0,ty=0,stream=null,track=null,mode='none',frozen=false,torchOn=false,fi=0,photoUrl=null;
+  var filters=[
+    {n:'通常',c:'none'},
+    {n:'高コントラスト',c:'contrast(1.6) saturate(1.15)'},
+    {n:'白黒反転',c:'grayscale(1) invert(1) contrast(1.3)'},
+    {n:'白黒',c:'grayscale(1) contrast(1.8)'}
+  ];
+
+  function clamp(v,a,b){return Math.max(a,Math.min(b,v))}
+  function apply(){
+    var w=stage.clientWidth,h=stage.clientHeight;
+    var mx=(scale-1)*w/2,my=(scale-1)*h/2;
+    tx=clamp(tx,-mx,mx);ty=clamp(ty,-my,my);
+    layer.style.transform='translate('+tx+'px,'+ty+'px) scale('+scale+')';
+    zoomEl.value=scale;
+    readout.textContent='×'+scale.toFixed(1);
+  }
+  function setScale(s){scale=clamp(s,1,10);apply()}
+
+  /* gestures: one finger pans, two fingers pinch */
+  var ptrs=new Map(),lastDist=0;
+  stage.addEventListener('pointerdown',function(e){
+    if(mode==='none')return;
+    ptrs.set(e.pointerId,{x:e.clientX,y:e.clientY});
+    try{stage.setPointerCapture(e.pointerId)}catch(_){}
+    if(ptrs.size===2){var p=Array.from(ptrs.values());lastDist=Math.hypot(p[0].x-p[1].x,p[0].y-p[1].y)}
+  });
+  stage.addEventListener('pointermove',function(e){
+    var p=ptrs.get(e.pointerId);if(!p)return;
+    if(ptrs.size===1){tx+=e.clientX-p.x;ty+=e.clientY-p.y;p.x=e.clientX;p.y=e.clientY;apply()}
+    else if(ptrs.size===2){
+      p.x=e.clientX;p.y=e.clientY;
+      var a=Array.from(ptrs.values());
+      var d=Math.hypot(a[0].x-a[1].x,a[0].y-a[1].y);
+      if(lastDist>0)setScale(scale*d/lastDist);
+      lastDist=d;
+    }
+  });
+  function endPtr(e){ptrs.delete(e.pointerId);lastDist=0}
+  stage.addEventListener('pointerup',endPtr);
+  stage.addEventListener('pointercancel',endPtr);
+  stage.addEventListener('wheel',function(e){
+    if(mode==='none')return;
+    e.preventDefault();setScale(scale*(e.deltaY<0?1.1:1/1.1));
+  },{passive:false});
+
+  zoomEl.addEventListener('input',function(){setScale(parseFloat(zoomEl.value))});
+  $('zoomIn').addEventListener('click',function(){setScale(scale+0.5)});
+  $('zoomOut').addEventListener('click',function(){setScale(scale-0.5)});
+  $('resetBtn').addEventListener('click',function(){tx=0;ty=0;setScale(1)});
+
+  function showMode(m){
+    mode=m;
+    video.hidden=(m!=='video');
+    photo.hidden=(m!=='photo');
+    intro.hidden=(m!=='none');
+    readout.hidden=(m==='none');
+    badge.hidden=(m==='none');
+    badge.textContent=m==='video'?(frozen?'静止中':'ライブ'):'写真';
+    freezeBtn.disabled=(m!=='video');
+    freezeBtn.style.opacity=(m==='video')?1:.45;
+    tx=0;ty=0;apply();
+  }
+
+  function stopCamera(){
+    if(stream){stream.getTracks().forEach(function(t){t.stop()})}
+    stream=null;track=null;torchOn=false;torchBtn.hidden=true;torchBtn.setAttribute('aria-pressed','false');
+  }
+
+  async function startCamera(){
+    note.textContent='';
+    if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){
+      note.textContent='この画面ではカメラを直接使えません。下の「写真を撮る・選ぶ」から撮影した写真を拡大できます。';
+      return;
+    }
+    try{
+      stopCamera();
+      stream=await navigator.mediaDevices.getUserMedia({
+        video:{facingMode:{ideal:'environment'},width:{ideal:1920},height:{ideal:1080}},audio:false
+      });
+      video.srcObject=stream;
+      await video.play();
+      track=stream.getVideoTracks()[0];
+      frozen=false;freezeBtn.setAttribute('aria-pressed','false');freezeBtn.textContent='固定';
+      showMode('video');
+      try{
+        var caps=track.getCapabilities?track.getCapabilities():{};
+        torchBtn.hidden=!caps.torch;
+      }catch(_){torchBtn.hidden=true}
+    }catch(err){
+      var denied=err&&(err.name==='NotAllowedError'||err.name==='SecurityError');
+      note.textContent=denied
+        ?'カメラの使用が許可されていません。ブラウザの設定で許可するか、写真を撮って拡大してください。'
+        :'カメラを起動できませんでした。写真を撮って拡大してください。';
+      showMode('none');
+    }
+  }
+
+  function loadFile(f){
+    if(!f)return;
+    stopCamera();
+    if(photoUrl)URL.revokeObjectURL(photoUrl);
+    photoUrl=URL.createObjectURL(f);
+    photo.onload=function(){frozen=false;showMode('photo');setScale(1)};
+    photo.src=photoUrl;
+  }
+
+  $('startBtn').addEventListener('click',startCamera);
+  $('camBtn').addEventListener('click',startCamera);
+  $('fileIntro').addEventListener('change',function(e){loadFile(e.target.files[0]);e.target.value=''});
+  $('fileBar').addEventListener('change',function(e){loadFile(e.target.files[0]);e.target.value=''});
+
+  freezeBtn.addEventListener('click',function(){
+    if(mode!=='video')return;
+    frozen=!frozen;
+    if(frozen)video.pause();else video.play();
+    freezeBtn.setAttribute('aria-pressed',frozen?'true':'false');
+    freezeBtn.textContent=frozen?'再開':'固定';
+    badge.textContent=frozen?'静止中':'ライブ';
+  });
+
+  filterBtn.addEventListener('click',function(){
+    fi=(fi+1)%filters.length;
+    layer.style.filter=filters[fi].c;
+    filterBtn.textContent='色：'+filters[fi].n;
+  });
+
+  torchBtn.addEventListener('click',async function(){
+    if(!track)return;
+    try{
+      torchOn=!torchOn;
+      await track.applyConstraints({advanced:[{torch:torchOn}]});
+      torchBtn.setAttribute('aria-pressed',torchOn?'true':'false');
+    }catch(_){torchOn=false;torchBtn.hidden=true}
+  });
+
+  document.addEventListener('visibilitychange',function(){
+    if(document.hidden&&mode==='video'){stopCamera();showMode('none');note.textContent='カメラを止めました。もう一度起動してください。'}
+  });
+  window.addEventListener('resize',apply);
+  showMode('none');
+})();
+</script>
+
+</body></html>
