@@ -1,0 +1,15 @@
+{
+  "id": "./",
+  "name": "拡大鏡",
+  "short_name": "拡大鏡",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0d1012",
+  "theme_color": "#0d1012",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" }
+  ]
+}
