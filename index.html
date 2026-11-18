@@ -40,7 +40,10 @@ body{
   background:#000;border-radius:14px;border:1px solid var(--line);
   touch-action:none;user-select:none;-webkit-user-select:none;
 }
-.layer{position:absolute;inset:0;transform-origin:50% 50%;will-change:transform}
+/* viewer: くっきり(シャープ)フィルターは拡大後の画面ピクセルに対してかけるため、拡大する層(.layer)の外側に置く */
+.viewer{position:absolute;inset:0;overflow:hidden}
+/* will-change は付けない: 付けると拡大前の解像度のまま引き伸ばされて写真がボヤけるため */
+.layer{position:absolute;inset:0;transform-origin:50% 50%}
 .layer video,.layer img{position:absolute;inset:0;width:100%;height:100%;display:block;pointer-events:none}
 .layer video{object-fit:cover}
 .layer img{object-fit:contain}
@@ -64,8 +67,10 @@ body{
   display:flex;flex-direction:column;gap:10px;padding:12px;
   background:var(--panel);border:1px solid var(--line);border-radius:14px;
 }
-.zoomrow{display:flex;align-items:center;gap:10px}
+.zoomrow,.focusrow{display:flex;align-items:center;gap:10px}
 .zoomrow input[type=range]{flex:1;min-width:0;height:40px;accent-color:var(--accent)}
+.focusrow input[type=range]{flex:1;min-width:0;height:36px;accent-color:var(--accent)}
+.focusrow span{color:var(--muted);font-size:13px;flex:none}
 .btn{
   appearance:none;font:inherit;color:var(--fg);background:#222a2e;border:1px solid var(--line);
   border-radius:12px;min-height:52px;padding:0 10px;font-weight:600;cursor:pointer;
@@ -77,22 +82,34 @@ body{
 .btn:focus-visible,input:focus-visible{outline:3px solid #fff;outline-offset:2px}
 .btn:active{transform:scale(.97)}
 .btn[hidden]{display:none}
-.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(76px,1fr));gap:8px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(72px,1fr));gap:8px}
 .file{position:relative;overflow:hidden}
 .file input{position:absolute;inset:0;opacity:0;width:100%;height:100%;cursor:pointer}
 @media (prefers-reduced-motion:reduce){.btn:active{transform:none}}
 </style>
 
+<!-- シャープ化フィルター(弱・強)。拡大でにじんだ輪郭を強調する -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <filter id="sharpS" color-interpolation-filters="sRGB" x="0" y="0" width="100%" height="100%">
+    <feConvolveMatrix order="3" kernelMatrix="0 -0.5 0 -0.5 3 -0.5 0 -0.5 0" preserveAlpha="true"/>
+  </filter>
+  <filter id="sharpL" color-interpolation-filters="sRGB" x="0" y="0" width="100%" height="100%">
+    <feConvolveMatrix order="3" kernelMatrix="0 -1 0 -1 5 -1 0 -1 0" preserveAlpha="true"/>
+  </filter>
+</svg>
+
 <div class="stage" id="stage">
-  <div class="layer" id="layer">
-    <video id="video" playsinline muted autoplay hidden></video>
-    <img id="photo" alt="拡大中の写真" hidden>
+  <div class="viewer" id="viewer">
+    <div class="layer" id="layer">
+      <video id="video" playsinline muted autoplay hidden></video>
+      <img id="photo" alt="拡大中の写真" hidden>
+    </div>
   </div>
   <div class="readout" id="readout" hidden>×1.0</div>
   <div class="badge" id="badge" hidden></div>
   <div class="intro" id="intro">
     <h1>拡大鏡</h1>
-    <p>カメラで映した文字や小さな部分を拡大します。ピンチやスライダーで倍率を変え、指でなぞって動かせます。</p>
+    <p>カメラで映した文字や小さな部分を拡大します。ピンチやスライダーで倍率を変え、指でなぞって動かせます。画面をタップするとピントを合わせ直します。</p>
     <button class="btn primary" id="startBtn" type="button" style="min-width:220px;min-height:56px;font-size:17px">カメラを起動する</button>
     <label class="btn file" style="min-width:220px;min-height:52px">写真を撮る・選ぶ
       <input type="file" accept="image/*" id="fileIntro">
@@ -107,11 +124,20 @@ body{
     <input type="range" id="zoom" min="1" max="10" step="0.1" value="1" aria-label="倍率">
     <button class="btn round" id="zoomIn" type="button" aria-label="拡大">＋</button>
   </div>
+  <div class="focusrow" id="focusRow" hidden>
+    <span>近い</span>
+    <input type="range" id="focusEl" min="0" max="1" step="0.01" value="0" aria-label="手動ピント">
+    <span>遠い</span>
+  </div>
   <div class="grid">
     <button class="btn" id="camBtn" type="button">カメラ</button>
     <button class="btn" id="freezeBtn" type="button" aria-pressed="false">固定</button>
+    <button class="btn" id="focusBtn" type="button" hidden>ピント合わせ</button>
+    <button class="btn" id="manualBtn" type="button" aria-pressed="false" hidden>手動ピント</button>
+    <button class="btn" id="sharpBtn" type="button">くっきり：切</button>
     <button class="btn" id="filterBtn" type="button">色：通常</button>
     <button class="btn" id="torchBtn" type="button" aria-pressed="false" hidden>ライト</button>
+    <button class="btn" id="hiresBtn" type="button" hidden>高画質で撮影</button>
     <label class="btn file">写真
       <input type="file" accept="image/*" id="fileBar">
     </label>
@@ -122,40 +148,142 @@ body{
 <script>
 (function(){
   var $=function(id){return document.getElementById(id)};
-  var stage=$('stage'),layer=$('layer'),video=$('video'),photo=$('photo');
+  var stage=$('stage'),viewer=$('viewer'),layer=$('layer'),video=$('video'),photo=$('photo');
   var intro=$('intro'),note=$('note'),readout=$('readout'),badge=$('badge');
   var zoomEl=$('zoom'),freezeBtn=$('freezeBtn'),filterBtn=$('filterBtn'),torchBtn=$('torchBtn');
+  var focusBtn=$('focusBtn'),manualBtn=$('manualBtn'),focusRow=$('focusRow'),focusEl=$('focusEl');
+  var sharpBtn=$('sharpBtn'),hiresBtn=$('hiresBtn');
   var scale=1,tx=0,ty=0,stream=null,track=null,mode='none',frozen=false,torchOn=false,fi=0,photoUrl=null;
+  var si=0;                 /* シャープ化: 0=切 1=弱 2=強 */
+  var zoomCap=null;         /* カメラ本体のズーム能力 {min,max,step} */
+  var hwApplied=1,hwWanted=1,hwBusy=false;
+  var focusModes=[],focusCap=null,manualOn=false,focusTimer=null;
   var filters=[
-    {n:'通常',c:'none'},
+    {n:'通常',c:''},
     {n:'高コントラスト',c:'contrast(1.6) saturate(1.15)'},
     {n:'白黒反転',c:'grayscale(1) invert(1) contrast(1.3)'},
     {n:'白黒',c:'grayscale(1) contrast(1.8)'}
   ];
+  var sharps=[{n:'切',c:''},{n:'弱',c:'url(#sharpS)'},{n:'強',c:'url(#sharpL)'}];
 
   function clamp(v,a,b){return Math.max(a,Math.min(b,v))}
+
+  /* ---- 倍率: カメラ本体のズーム(きれい)を先に使い、足りない分だけ画面側で拡大 ---- */
+  function pushZoom(z){
+    hwWanted=z;
+    if(hwBusy)return;
+    hwBusy=true;
+    (async function loop(){
+      while(track&&zoomCap&&Math.abs(hwWanted-hwApplied)>0.001){
+        var z2=hwWanted;
+        try{await track.applyConstraints({advanced:[{zoom:z2}]})}
+        catch(_){zoomCap=null;hwApplied=1;break}
+        hwApplied=z2;
+        apply();
+      }
+      hwBusy=false;
+    })();
+  }
+
   function apply(){
     var w=stage.clientWidth,h=stage.clientHeight;
-    var mx=(scale-1)*w/2,my=(scale-1)*h/2;
+    if(zoomCap&&mode==='video'){
+      if(frozen){scale=Math.max(scale,hwApplied)}
+      else{
+        var want=clamp(scale,Math.max(1,zoomCap.min),zoomCap.max);
+        if(Math.abs(want-hwWanted)>0.001)pushZoom(want);
+      }
+    }
+    var css=(zoomCap&&mode==='video')?Math.max(1,scale/hwApplied):scale;
+    var mx=(css-1)*w/2,my=(css-1)*h/2;
     tx=clamp(tx,-mx,mx);ty=clamp(ty,-my,my);
-    layer.style.transform='translate('+tx+'px,'+ty+'px) scale('+scale+')';
+    layer.style.transform='translate('+tx+'px,'+ty+'px) scale('+css+')';
     zoomEl.value=scale;
     readout.textContent='×'+scale.toFixed(1);
   }
   function setScale(s){scale=clamp(s,1,10);apply()}
 
-  /* gestures: one finger pans, two fingers pinch */
-  var ptrs=new Map(),lastDist=0;
+  function updateFilter(){
+    var parts=[filters[fi].c,sharps[si].c].filter(Boolean);
+    viewer.style.filter=parts.join(' ');
+  }
+
+  /* ---- ピント ---- */
+  function camApply(c){
+    if(!track)return Promise.reject(new Error('no track'));
+    return track.applyConstraints({advanced:[c]});
+  }
+  async function refocus(){
+    if(!track||frozen||manualOn||mode!=='video')return;
+    var m=focusModes;
+    if(m.indexOf('single-shot')<0&&!(m.indexOf('manual')>=0&&m.indexOf('continuous')>=0))return;
+    try{
+      focusBtn.textContent='ピント中…';
+      if(m.indexOf('single-shot')>=0){await camApply({focusMode:'single-shot'})}
+      else{await camApply({focusMode:'manual'})}
+      clearTimeout(focusTimer);
+      focusTimer=setTimeout(async function(){
+        try{if(m.indexOf('continuous')>=0)await camApply({focusMode:'continuous'})}catch(_){}
+        focusBtn.textContent='ピント合わせ';
+      },1500);
+    }catch(_){focusBtn.textContent='ピント合わせ'}
+  }
+  focusBtn.addEventListener('click',refocus);
+
+  manualBtn.addEventListener('click',async function(){
+    manualOn=!manualOn;
+    manualBtn.setAttribute('aria-pressed',manualOn?'true':'false');
+    focusRow.hidden=!manualOn;
+    try{
+      if(manualOn){await camApply({focusMode:'manual',focusDistance:parseFloat(focusEl.value)})}
+      else if(focusModes.indexOf('continuous')>=0){await camApply({focusMode:'continuous'})}
+    }catch(_){
+      manualOn=false;manualBtn.setAttribute('aria-pressed','false');focusRow.hidden=true;manualBtn.hidden=true;
+    }
+  });
+  focusEl.addEventListener('input',function(){
+    if(!manualOn)return;
+    camApply({focusMode:'manual',focusDistance:parseFloat(focusEl.value)}).catch(function(){});
+  });
+
+  function setupCaps(){
+    var caps={},st={};
+    try{caps=track.getCapabilities?track.getCapabilities():{}}catch(_){}
+    try{st=track.getSettings?track.getSettings():{}}catch(_){}
+    torchBtn.hidden=!caps.torch;
+    zoomCap=(caps.zoom&&caps.zoom.max>1)?caps.zoom:null;
+    hwApplied=hwWanted=(zoomCap&&st.zoom)?st.zoom:1;
+    focusModes=caps.focusMode||[];
+    focusBtn.hidden=!(focusModes.indexOf('single-shot')>=0||(focusModes.indexOf('manual')>=0&&focusModes.indexOf('continuous')>=0));
+    focusCap=caps.focusDistance||null;
+    manualBtn.hidden=!(focusCap&&focusModes.indexOf('manual')>=0);
+    if(focusCap){
+      focusEl.min=focusCap.min;focusEl.max=focusCap.max;
+      focusEl.step=focusCap.step||((focusCap.max-focusCap.min)/100);
+      focusEl.value=st.focusDistance!=null?st.focusDistance:focusCap.min;
+    }
+    manualOn=false;manualBtn.setAttribute('aria-pressed','false');focusRow.hidden=true;
+    hiresBtn.hidden=!(window.ImageCapture);
+    /* 常時オートフォーカスを指定(対応機種のみ) */
+    if(focusModes.indexOf('continuous')>=0){camApply({focusMode:'continuous'}).catch(function(){})}
+  }
+
+  /* ---- ジェスチャー: 1本指=移動 2本指=ピンチ / 短いタップ=ピント合わせ直し ---- */
+  var ptrs=new Map(),lastDist=0,down=null;
   stage.addEventListener('pointerdown',function(e){
     if(mode==='none')return;
     ptrs.set(e.pointerId,{x:e.clientX,y:e.clientY});
     try{stage.setPointerCapture(e.pointerId)}catch(_){}
+    if(ptrs.size===1){down={x:e.clientX,y:e.clientY,t:Date.now(),moved:false}}
+    else{down=null}
     if(ptrs.size===2){var p=Array.from(ptrs.values());lastDist=Math.hypot(p[0].x-p[1].x,p[0].y-p[1].y)}
   });
   stage.addEventListener('pointermove',function(e){
     var p=ptrs.get(e.pointerId);if(!p)return;
-    if(ptrs.size===1){tx+=e.clientX-p.x;ty+=e.clientY-p.y;p.x=e.clientX;p.y=e.clientY;apply()}
-    else if(ptrs.size===2){
+    if(ptrs.size===1){
+      if(down&&Math.hypot(e.clientX-down.x,e.clientY-down.y)>8)down.moved=true;
+      tx+=e.clientX-p.x;ty+=e.clientY-p.y;p.x=e.clientX;p.y=e.clientY;apply();
+    }else if(ptrs.size===2){
       p.x=e.clientX;p.y=e.clientY;
       var a=Array.from(ptrs.values());
       var d=Math.hypot(a[0].x-a[1].x,a[0].y-a[1].y);
@@ -164,8 +292,11 @@ body{
     }
   });
   function endPtr(e){ptrs.delete(e.pointerId);lastDist=0}
-  stage.addEventListener('pointerup',endPtr);
-  stage.addEventListener('pointercancel',endPtr);
+  stage.addEventListener('pointerup',function(e){
+    if(ptrs.size===1&&down&&!down.moved&&Date.now()-down.t<350&&mode==='video'){refocus()}
+    down=null;endPtr(e);
+  });
+  stage.addEventListener('pointercancel',function(e){down=null;endPtr(e)});
   stage.addEventListener('wheel',function(e){
     if(mode==='none')return;
     e.preventDefault();setScale(scale*(e.deltaY<0?1.1:1/1.1));
@@ -192,6 +323,9 @@ body{
   function stopCamera(){
     if(stream){stream.getTracks().forEach(function(t){t.stop()})}
     stream=null;track=null;torchOn=false;torchBtn.hidden=true;torchBtn.setAttribute('aria-pressed','false');
+    zoomCap=null;hwApplied=hwWanted=1;
+    focusBtn.hidden=true;manualBtn.hidden=true;focusRow.hidden=true;hiresBtn.hidden=true;manualOn=false;
+    clearTimeout(focusTimer);focusBtn.textContent='ピント合わせ';
   }
 
   async function startCamera(){
@@ -202,18 +336,16 @@ body{
     }
     try{
       stopCamera();
+      /* できるだけ高い解像度を要求(元の画像が細かいほど拡大してもボヤけにくい) */
       stream=await navigator.mediaDevices.getUserMedia({
-        video:{facingMode:{ideal:'environment'},width:{ideal:1920},height:{ideal:1080}},audio:false
+        video:{facingMode:{ideal:'environment'},width:{ideal:3840},height:{ideal:2160},frameRate:{ideal:30}},audio:false
       });
       video.srcObject=stream;
       await video.play();
       track=stream.getVideoTracks()[0];
       frozen=false;freezeBtn.setAttribute('aria-pressed','false');freezeBtn.textContent='固定';
+      setupCaps();
       showMode('video');
-      try{
-        var caps=track.getCapabilities?track.getCapabilities():{};
-        torchBtn.hidden=!caps.torch;
-      }catch(_){torchBtn.hidden=true}
     }catch(err){
       var denied=err&&(err.name==='NotAllowedError'||err.name==='SecurityError');
       note.textContent=denied
@@ -240,16 +372,39 @@ body{
   freezeBtn.addEventListener('click',function(){
     if(mode!=='video')return;
     frozen=!frozen;
-    if(frozen)video.pause();else video.play();
+    if(frozen)video.pause();else{video.play();hwWanted=hwApplied}
     freezeBtn.setAttribute('aria-pressed',frozen?'true':'false');
     freezeBtn.textContent=frozen?'再開':'固定';
     badge.textContent=frozen?'静止中':'ライブ';
+    apply();
+  });
+
+  /* 高画質で撮影: カメラの最大解像度の静止画を撮り、写真として拡大する(対応機種のみ) */
+  hiresBtn.addEventListener('click',async function(){
+    if(!track||mode!=='video')return;
+    var old=hiresBtn.textContent;
+    try{
+      hiresBtn.textContent='撮影中…';
+      var ic=new ImageCapture(track);
+      var blob=await ic.takePhoto();
+      hiresBtn.textContent=old;
+      loadFile(blob);
+    }catch(_){
+      hiresBtn.textContent='撮影できません';
+      setTimeout(function(){hiresBtn.textContent=old},1800);
+    }
   });
 
   filterBtn.addEventListener('click',function(){
     fi=(fi+1)%filters.length;
-    layer.style.filter=filters[fi].c;
+    updateFilter();
     filterBtn.textContent='色：'+filters[fi].n;
+  });
+  sharpBtn.addEventListener('click',function(){
+    si=(si+1)%sharps.length;
+    updateFilter();
+    sharpBtn.textContent='くっきり：'+sharps[si].n;
+    sharpBtn.setAttribute('aria-pressed',si?'true':'false');
   });
 
   torchBtn.addEventListener('click',async function(){
